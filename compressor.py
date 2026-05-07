@@ -69,13 +69,20 @@ def format_size(size_bytes: int) -> str:
 
 
 def compress_image(
-    src_path: Path, output_dir: Path, scale: float = DEFAULT_SCALE, quality: int = DEFAULT_QUALITY
+    src_path: Path,
+    output_dir: Path,
+    scale: float = DEFAULT_SCALE,
+    quality: int = DEFAULT_QUALITY,
+    fixed_width: int | None = None,
+    fixed_height: int | None = None,
 ) -> tuple[int, int]:
     """
     压缩单张图片并保存到输出目录。
     返回 (原始大小, 压缩后大小)。
 
-    - scale: 缩放比例 (0.1-1.0)，先按比例缩小分辨率。
+    - fixed_width: 固定宽度 (px)，高度按比例自动计算，优先级高于 scale。
+    - fixed_height: 固定高度 (px)，宽度按比例自动计算，优先级高于 scale。
+    - scale: 缩放比例 (0.1-1.0)，未指定固定宽高时使用。
     - quality: JPG/WEBP 压缩质量。
     - PNG: 使用有损优化 (optimize=True) 并转为 palette 模式以尽量压缩体积。
     """
@@ -85,8 +92,16 @@ def compress_image(
 
     img = Image.open(src_path)
 
-    # 按比例缩小分辨率，使用 LANCZOS 高质量缩放算法
-    if scale < 1.0:
+    # 优先使用固定宽/高，另一边按原图比例计算
+    if fixed_width is not None:
+        new_width = fixed_width
+        new_height = round(img.height * (fixed_width / img.width))
+        img = img.resize((new_width, new_height), Image.LANCZOS)
+    elif fixed_height is not None:
+        new_height = fixed_height
+        new_width = round(img.width * (fixed_height / img.height))
+        img = img.resize((new_width, new_height), Image.LANCZOS)
+    elif scale < 1.0:
         new_width = int(img.width * scale)
         new_height = int(img.height * scale)
         img = img.resize((new_width, new_height), Image.LANCZOS)
@@ -139,15 +154,41 @@ def main():
     folder = input("\n请输入图片文件夹路径: ").strip().strip('"').strip("'")
     folder = normalize_path(folder)
 
-    # 缩放比例
-    scale_input = input(
-        f"请输入缩放比例 (0.1-1.0, 回车使用默认 {DEFAULT_SCALE}): "
-    ).strip()
-    try:
-        scale = float(scale_input)
-        scale = max(0.1, min(1.0, scale))
-    except ValueError:
-        scale = DEFAULT_SCALE
+    # 选择压缩方式
+    fixed_width = None
+    fixed_height = None
+    scale = DEFAULT_SCALE
+
+    print("\n请选择压缩方式:")
+    print("  1. 按比例缩放 (默认)")
+    print("  2. 固定宽度")
+    print("  3. 固定高度")
+    mode_input = input("请输入选项 (1/2/3, 回车默认1): ").strip()
+
+    if mode_input == "2":
+        w_input = input("请输入目标宽度 (px): ").strip()
+        if w_input.isdigit() and int(w_input) > 0:
+            fixed_width = int(w_input)
+        else:
+            print("输入无效，将使用按比例缩放模式。")
+            mode_input = "1"
+    elif mode_input == "3":
+        h_input = input("请输入目标高度 (px): ").strip()
+        if h_input.isdigit() and int(h_input) > 0:
+            fixed_height = int(h_input)
+        else:
+            print("输入无效，将使用按比例缩放模式。")
+            mode_input = "1"
+
+    if mode_input != "2" and mode_input != "3":
+        scale_input = input(
+            f"请输入缩放比例 (0.1-1.0, 回车使用默认 {DEFAULT_SCALE}): "
+        ).strip()
+        try:
+            scale = float(scale_input)
+            scale = max(0.1, min(1.0, scale))
+        except ValueError:
+            scale = DEFAULT_SCALE
 
     # 可选：自定义压缩质量
     quality_input = input(
@@ -162,7 +203,14 @@ def main():
         print("\n未找到可压缩的图片文件。")
         sys.exit(0)
 
-    print(f"\n找到 {len(images)} 张图片，开始压缩... (缩放: {scale*100:.0f}%, 质量: {quality})\n")
+    dim_desc = ""
+    if fixed_width is not None:
+        dim_desc = f"固定宽度: {fixed_width}px"
+    elif fixed_height is not None:
+        dim_desc = f"固定高度: {fixed_height}px"
+    else:
+        dim_desc = f"缩放: {scale*100:.0f}%"
+    print(f"\n找到 {len(images)} 张图片，开始压缩... ({dim_desc}, 质量: {quality})\n")
     print(f"{'文件名':<40} {'压缩前':>10} {'压缩后':>10} {'节省':>8}")
     print("-" * 72)
 
@@ -176,7 +224,9 @@ def main():
 
     for img_path in images:
         try:
-            original_size, compressed_size = compress_image(img_path, output_dir, scale, quality)
+            original_size, compressed_size = compress_image(
+                img_path, output_dir, scale, quality, fixed_width, fixed_height
+            )
             saved = original_size - compressed_size
             percent = (saved / original_size * 100) if original_size > 0 else 0
             total_original += original_size
